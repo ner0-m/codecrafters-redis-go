@@ -10,7 +10,7 @@ func handleClient(conn net.Conn) {
 	defer conn.Close()
 
 	b := []byte("+PONG\r\n")
-	_, err = conn.Write(b)
+	_, err := conn.Write(b)
 
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
