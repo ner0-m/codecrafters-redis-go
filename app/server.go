@@ -32,6 +32,7 @@ func handler(conn net.Conn) {
 			return
 		}
 	}
+
 	//
 	// b := []byte("+PONG\r\n")
 	// _, err := conn.Write(b)
