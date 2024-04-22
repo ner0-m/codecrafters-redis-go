@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -17,6 +18,8 @@ const (
 	Bulk   = '$'
 	Array  = '*'
 )
+
+var mtx = sync.RWMutex{}
 
 type Type byte
 
@@ -58,6 +61,10 @@ func parseBulk(count int, i int, b []byte) error {
 	}
 
 	return nil
+}
+
+func encodeBulk(str string) []byte {
+	return []byte("$" + strconv.Itoa(len(str)) + "\r\n" + str + "\r\n")
 }
 
 func ReadNextRESP(b []byte) (n int, resp Response) {
@@ -132,12 +139,12 @@ func ReadNextRESP(b []byte) (n int, resp Response) {
 
 	resp.Data = b[i : i+k]
 	resp.Raw = b[0 : i+k]
-    resp.Count = count
+	resp.Count = count
 
 	return len(resp.Raw), resp
 }
 
-func handleCommand(resp Response) ([]byte, error) {
+func handleCommand(resp Response, store map[string]string) ([]byte, error) {
 	str := resp.String()
 	lines := strings.Split(str, "\r\n")
 
@@ -151,14 +158,32 @@ func handleCommand(resp Response) ([]byte, error) {
 
 	switch strings.ToLower(cmd[0]) {
 	case "ping":
+		fmt.Printf("Debug: echo\n")
 		return []byte("+PONG\r\n"), nil
 	case "echo":
-		return []byte("$" + strconv.Itoa(len(cmd[1])) + "\r\n" + cmd[1] + "\r\n"), nil
+		fmt.Printf("Debug: echo %s\n", cmd[1])
+		return encodeBulk(cmd[1]), nil
+	case "set":
+		fmt.Printf("Debug: set %s = %s\n", cmd[1], cmd[2])
+        mtx.Lock()
+		store[cmd[1]] = cmd[2]
+        mtx.Unlock()
+		return []byte("+OK\r\n"), nil
+	case "get":
+        mtx.Lock()
+		v, ok := store[cmd[1]]
+        mtx.Unlock()
+		if !ok {
+		    fmt.Printf("Debug: get %s, not in store\n", cmd[1])
+			return []byte("$-1\r\n"), nil
+		}
+		fmt.Printf("Debug: get %s = %s\n", cmd[1], v)
+		return encodeBulk(v), nil
 	}
-    return nil, errors.New("Unknown command: '" + strings.Join(cmd[:], " ") + "'")
+	return nil, errors.New("Unknown command: '" + strings.Join(cmd[:], " ") + "'")
 }
 
-func parseMsg(msg []byte) ([]byte, error) {
+func parseMsg(msg []byte, store map[string]string) ([]byte, error) {
 	s, resp := ReadNextRESP(msg)
 
 	if s == 0 {
@@ -172,10 +197,10 @@ func parseMsg(msg []byte) ([]byte, error) {
 	case Status:
 	case Bulk:
 	case Array:
-        response, err := handleCommand(resp)
-        if err != nil {
-            return nil, err
-        }
+		response, err := handleCommand(resp, store)
+		if err != nil {
+			return nil, err
+		}
 
 		return response, nil
 	case Error:
@@ -184,7 +209,7 @@ func parseMsg(msg []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func handler(conn net.Conn) {
+func handler(conn net.Conn, store map[string]string) {
 	defer conn.Close()
 
 	for {
@@ -201,7 +226,7 @@ func handler(conn net.Conn) {
 			return
 		}
 
-		response, err := parseMsg(buf[:n])
+		response, err := parseMsg(buf[:n], store)
 		if err != nil {
 			fmt.Println("Error reading resp", err.Error())
 			os.Exit(1)
@@ -218,14 +243,16 @@ func handler(conn net.Conn) {
 	}
 }
 
-func eventLoop(connections chan net.Conn) {
+func eventLoop(connections chan net.Conn, store map[string]string) {
 	for conn := range connections {
 		fmt.Println("New connection")
-		go handler(conn)
+		go handler(conn, store)
 	}
 }
 
 func main() {
+	store := make(map[string]string)
+
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
@@ -236,7 +263,7 @@ func main() {
 	fmt.Println("Server is listening on port 6379")
 
 	connections := make(chan net.Conn)
-	go eventLoop(connections)
+	go eventLoop(connections, store)
 
 	for {
 		conn, err := l.Accept()
