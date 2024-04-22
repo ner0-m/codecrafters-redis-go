@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
 const (
@@ -18,8 +18,6 @@ const (
 	Bulk   = '$'
 	Array  = '*'
 )
-
-var mtx = sync.RWMutex{}
 
 type Type byte
 
@@ -144,7 +142,7 @@ func ReadNextRESP(b []byte) (n int, resp Response) {
 	return len(resp.Raw), resp
 }
 
-func handleCommand(resp Response, store map[string]string) ([]byte, error) {
+func handleCommand(resp Response, store Store) ([]byte, error) {
 	str := resp.String()
 	lines := strings.Split(str, "\r\n")
 
@@ -164,17 +162,26 @@ func handleCommand(resp Response, store map[string]string) ([]byte, error) {
 		fmt.Printf("Debug: echo %s\n", cmd[1])
 		return encodeBulk(cmd[1]), nil
 	case "set":
-		fmt.Printf("Debug: set %s = %s\n", cmd[1], cmd[2])
-        mtx.Lock()
-		store[cmd[1]] = cmd[2]
-        mtx.Unlock()
-		return []byte("+OK\r\n"), nil
+		if len(cmd) == 3 {
+			fmt.Printf("Debug: set %s = %s\n", cmd[1], cmd[2])
+			store.Write(cmd[1], cmd[2], nil)
+			return []byte("+OK\r\n"), nil
+		} else if len(cmd) == 5 && strings.ToLower(cmd[3]) == "px" {
+			fmt.Printf("Debug: set %s = %s, %s %s\n", cmd[1], cmd[2], cmd[3], cmd[4])
+			d, err := strconv.Atoi(cmd[4])
+			if err != nil {
+				return nil, errors.New("Could not convert expiery length")
+			}
+			var dur *time.Duration
+			dur = new(time.Duration)
+			*dur = time.Duration(d) * time.Millisecond
+			store.Write(cmd[1], cmd[2], dur)
+			return []byte("+OK\r\n"), nil
+		}
 	case "get":
-        mtx.Lock()
-		v, ok := store[cmd[1]]
-        mtx.Unlock()
+		v, ok := store.Read(cmd[1])
 		if !ok {
-		    fmt.Printf("Debug: get %s, not in store\n", cmd[1])
+			fmt.Printf("Debug: get %s, not in store\n", cmd[1])
 			return []byte("$-1\r\n"), nil
 		}
 		fmt.Printf("Debug: get %s = %s\n", cmd[1], v)
@@ -183,7 +190,7 @@ func handleCommand(resp Response, store map[string]string) ([]byte, error) {
 	return nil, errors.New("Unknown command: '" + strings.Join(cmd[:], " ") + "'")
 }
 
-func parseMsg(msg []byte, store map[string]string) ([]byte, error) {
+func parseMsg(msg []byte, store Store) ([]byte, error) {
 	s, resp := ReadNextRESP(msg)
 
 	if s == 0 {
@@ -209,7 +216,7 @@ func parseMsg(msg []byte, store map[string]string) ([]byte, error) {
 	return nil, nil
 }
 
-func handler(conn net.Conn, store map[string]string) {
+func handler(conn net.Conn, store Store) {
 	defer conn.Close()
 
 	for {
@@ -243,7 +250,7 @@ func handler(conn net.Conn, store map[string]string) {
 	}
 }
 
-func eventLoop(connections chan net.Conn, store map[string]string) {
+func eventLoop(connections chan net.Conn, store Store) {
 	for conn := range connections {
 		fmt.Println("New connection")
 		go handler(conn, store)
@@ -251,7 +258,9 @@ func eventLoop(connections chan net.Conn, store map[string]string) {
 }
 
 func main() {
-	store := make(map[string]string)
+	store := Store{
+		Store: make(map[string]Value),
+	}
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
