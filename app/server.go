@@ -137,7 +137,7 @@ func ReadNextRESP(b []byte) (n int, resp Response) {
 	return len(resp.Raw), resp
 }
 
-func handleCommand(resp Response) []byte {
+func handleCommand(resp Response) ([]byte, error) {
 	str := resp.String()
 	lines := strings.Split(str, "\r\n")
 
@@ -151,13 +151,11 @@ func handleCommand(resp Response) []byte {
 
 	switch strings.ToLower(cmd[0]) {
 	case "ping":
-		return []byte("+PONG\r\n")
+		return []byte("+PONG\r\n"), nil
 	case "echo":
-		return []byte("$" + strconv.Itoa(len(cmd[1])) + "\r\n" + cmd[1] + "\r\n")
-	default:
-		fmt.Println("Error with command: ", cmd)
+		return []byte("$" + strconv.Itoa(len(cmd[1])) + "\r\n" + cmd[1] + "\r\n"), nil
 	}
-	return nil
+    return nil, errors.New("Unknown command: '" + strings.Join(cmd[:], " ") + "'")
 }
 
 func parseMsg(msg []byte) ([]byte, error) {
@@ -174,7 +172,12 @@ func parseMsg(msg []byte) ([]byte, error) {
 	case Status:
 	case Bulk:
 	case Array:
-		return handleCommand(resp), nil
+        response, err := handleCommand(resp)
+        if err != nil {
+            return nil, err
+        }
+
+		return response, nil
 	case Error:
 		return []byte(""), nil
 	}
