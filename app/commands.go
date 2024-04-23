@@ -113,7 +113,7 @@ func psync(args []string, instance Instance) ([]byte, error) {
 		repl := instance.Info["replication"]
 		replid := repl["master_replid"]
 		repl_offset := repl["master_repl_offset"]
-		return []byte(fmt.Sprintf("+FULLRESYNC %s %s", replid, repl_offset)), nil
+		return []byte(fmt.Sprintf("+FULLRESYNC %s %s\r\n", replid, repl_offset)), nil
 	}
 
 	return nil, fmt.Errorf("Unknown PSYNC args %v", args)
