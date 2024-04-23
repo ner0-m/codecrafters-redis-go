@@ -63,12 +63,14 @@ func handler(conn net.Conn, instance Instance) {
 		}
 
 		cmd, err := parseMsg(buf[:n])
+		fmt.Printf("%+v\n", cmd)
 		if err != nil {
 			fmt.Println("Error parsing resp", err.Error())
 			os.Exit(1)
 		}
 
 		response, err := cmd.Respond(instance)
+		fmt.Println(string(response))
 		if err != nil {
 			fmt.Println("Error creating responds:", err.Error())
 			os.Exit(1)
@@ -100,6 +102,26 @@ type Instance struct {
 	Info  dict_of_dict
 }
 
+func syncSlaveToMaster(masterAddr string) {
+	conn, err := net.Dial("tcp", masterAddr)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = conn.Write([]byte("*1\r\n$4\r\nping\r\n"))
+	if err != nil {
+		panic(err)
+	}
+
+	var resp []byte
+	_, err = conn.Read(resp)
+
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(resp))
+}
+
 func main() {
 	host := "0.0.0.0"
 	port := "6379"
@@ -121,19 +143,24 @@ func main() {
 	flag.Parse()
 
 	if len(*primary_host_arg_pointer) > 0 {
-		primary_host := (*primary_host_arg_pointer)
-		if len(primary_host) > 1 {
-			primary_port := flag.Arg(0)
-			if len(primary_port) > 0 {
+		master_host := (*primary_host_arg_pointer)
+		if len(master_host) > 1 {
+			master_port := flag.Arg(0)
+			if len(master_port) > 0 {
 				instance.Info["replication"]["role"] = "slave"
-				instance.Info["replication"]["host"] = primary_host
-				instance.Info["replication"]["port"] = primary_port
+				instance.Info["replication"]["port"] = master_port
+				instance.Info["replication"]["host"] = master_host
 			}
 		}
 	}
 
 	if len(*port_arg_pointer) > 0 {
 		port = *port_arg_pointer
+	}
+
+	// Sync if we are a slave
+	if instance.Info["replication"]["role"] == "slave" {
+		syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]))
 	}
 
 	// Start server
