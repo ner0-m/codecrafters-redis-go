@@ -7,9 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
-	"strconv"
 	"strings"
-	"time"
 )
 
 func handleCommand(resp Response, store Store) ([]byte, error) {
@@ -27,35 +25,20 @@ func handleCommand(resp Response, store Store) ([]byte, error) {
 	switch strings.ToLower(cmd[0]) {
 	case "ping":
 		fmt.Printf("Debug: echo\n")
-		return []byte("+PONG\r\n"), nil
+		return ping()
 	case "echo":
 		fmt.Printf("Debug: echo %s\n", cmd[1])
-		return encodeBulk(cmd[1]), nil
+		return echo(cmd[1])
 	case "set":
-		if len(cmd) == 3 {
-			fmt.Printf("Debug: set %s = %s\n", cmd[1], cmd[2])
-			store.Write(cmd[1], cmd[2], nil)
-			return []byte("+OK\r\n"), nil
-		} else if len(cmd) == 5 && strings.ToLower(cmd[3]) == "px" {
-			fmt.Printf("Debug: set %s = %s, %s %s\n", cmd[1], cmd[2], cmd[3], cmd[4])
-			d, err := strconv.Atoi(cmd[4])
-			if err != nil {
-				return nil, errors.New("Could not convert expiery length")
-			}
-			var dur *time.Duration
-			dur = new(time.Duration)
-			*dur = time.Duration(d) * time.Millisecond
-			store.Write(cmd[1], cmd[2], dur)
-			return []byte("+OK\r\n"), nil
-		}
+		return set(cmd, store)
 	case "get":
-		v, ok := store.Read(cmd[1])
-		if !ok {
-			fmt.Printf("Debug: get %s, not in store\n", cmd[1])
-			return []byte("$-1\r\n"), nil
-		}
-		fmt.Printf("Debug: get %s = %s\n", cmd[1], v)
-		return encodeBulk(v), nil
+        return get(cmd[1], store)
+    case "info":
+        if len(cmd) == 2 {
+            return info(cmd[1])
+        } else {
+            return info("")
+        }
 	}
 	return nil, errors.New("Unknown command: '" + strings.Join(cmd[:], " ") + "'")
 }
@@ -129,7 +112,7 @@ func eventLoop(connections chan net.Conn, store Store) {
 
 func main() {
 	port := flag.Int("port", 6379, "port to start TCP server on")
-    flag.Parse()
+	flag.Parse()
 
 	store := Store{
 		Store: make(map[string]Value),
