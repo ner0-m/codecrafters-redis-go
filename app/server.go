@@ -108,6 +108,8 @@ func main() {
 	instance.Info = make(dict_of_dict)
 	instance.Info["replication"] = make(dict)
 	instance.Info["replication"]["role"] = "master"
+	instance.Info["replication"]["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+	instance.Info["replication"]["master_repl_offset"] = "0"
 
 	instance.Store = Store{
 		Store: make(map[string]Value),

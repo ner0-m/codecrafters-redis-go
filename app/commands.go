@@ -81,7 +81,8 @@ func get(key string, store Store) ([]byte, error) {
 
 func info(section string, instance Instance) ([]byte, error) {
 	if strings.ToLower(section) == "replication" {
-		return encodeBulk(fmt.Sprintf("# Replication\r\nrole:%s\r\n", instance.Info["replication"]["role"])), nil
+        repl := instance.Info["replication"]
+        return encodeBulk(fmt.Sprintf("# Replication\r\nrole:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%s\r\n", repl["role"], repl["master_replid"], repl["master_repl_offset"])), nil
 	} else {
 		return nil, errors.New("Unknown INFO section: '" + section + "'")
 	}
