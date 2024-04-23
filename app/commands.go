@@ -15,6 +15,7 @@ const (
 	GET      = "get"
 	INFO     = "info"
 	REPLCONF = "replconf"
+	PSYNC    = "psync"
 	ERROR    = "error"
 )
 
@@ -37,6 +38,8 @@ func (cmd *Command) Respond(instance Instance) ([]byte, error) {
 		return info(cmd.Args[0], instance)
 	case REPLCONF:
 		return replconf(cmd.Args[0], cmd.Args[1:])
+	case PSYNC:
+		return psync(cmd.Args, instance)
 	case ERROR:
 		return []byte(""), nil
 	}
@@ -92,11 +95,26 @@ func info(section string, instance Instance) ([]byte, error) {
 }
 
 func replconf(cmd string, args []string) ([]byte, error) {
-    fmt.Printf("Command: REPLCONF %s %v\n", cmd, args)
+	fmt.Printf("Command: REPLCONF %s %v\n", cmd, args)
 	if strings.ToLower(cmd) == "listening-port" {
 		return []byte("+OK\r\n"), nil
 	} else if strings.ToLower(cmd) == "capa" {
 		return []byte("+OK\r\n"), nil
 	}
 	return nil, fmt.Errorf("Unknown command to replconf: %s, with args %v", cmd, args)
+}
+
+func psync(args []string, instance Instance) ([]byte, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("PSYNC requires two arguments, given %v", args)
+	}
+
+	if args[0] == "?" && args[1] == "-1" {
+		repl := instance.Info["replication"]
+		replid := repl["master_replid"]
+		repl_offset := repl["master_repl_offset"]
+		return []byte(fmt.Sprintf("+FULLRESYNC %s %s", replid, repl_offset)), nil
+	}
+
+	return nil, fmt.Errorf("Unknown PSYNC args %v", args)
 }
