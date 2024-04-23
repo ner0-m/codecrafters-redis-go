@@ -9,12 +9,12 @@ import (
 )
 
 const (
-	PING = "ping"
-	ECHO = "echo"
-	SET  = "set"
-	GET  = "get"
-	INFO = "info"
-    ERROR = "error"
+	PING  = "ping"
+	ECHO  = "echo"
+	SET   = "set"
+	GET   = "get"
+	INFO  = "info"
+	ERROR = "error"
 )
 
 type Command struct {
@@ -34,8 +34,8 @@ func (cmd *Command) Respond(instance Instance) ([]byte, error) {
 		return get(cmd.Args[0], instance.Store)
 	case INFO:
 		return info(cmd.Args[0], instance)
-    case ERROR:
-        return []byte(""), nil
+	case ERROR:
+		return []byte(""), nil
 	}
 	return nil, errors.New("Unknown Command")
 }
@@ -50,8 +50,8 @@ func echo(str string) ([]byte, error) {
 
 func set(args []string, store Store) ([]byte, error) {
 	if len(args) == 2 {
-		fmt.Printf("Debug: set %s = %s\n", args[1], args[2])
-		store.Write(args[1], args[2], nil)
+		fmt.Printf("Debug: set %s = %s\n", args[0], args[1])
+		store.Write(args[0], args[1], nil)
 		return []byte("+OK\r\n"), nil
 	} else if len(args) == 4 && strings.ToLower(args[2]) == "px" {
 		fmt.Printf("Debug: set %s = %s, %s %s\n", args[0], args[1], args[2], args[3])
