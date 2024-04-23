@@ -7,22 +7,29 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
-func parseMsg(msg []byte) (Command, error) {
+func parseMsg(msg []byte) (Command, []byte, error) {
 	s, resp := ReadNextRESP(msg)
 
 	if s == 0 {
-		return Command{}, errors.New("no resp object")
+		return Command{}, msg, errors.New("Length 0")
+	}
+
+	if s == -1 {
+		return Command{}, msg, errors.New("Invalid Type")
+	} else if s == -1 {
+		return Command{}, msg, errors.New("No \\r\\n")
 	}
 
 	if resp.Type == Error {
-		return Command{ERROR, make([]string, 0)}, nil
+		return Command{ERROR, make([]string, 0)}, msg[s:], nil
 	}
 
 	if resp.Type != Int && resp.Type != Status && resp.Type != Bulk && resp.Type != Array {
-		return Command{}, errors.New("Unknown Respond Type")
+		return Command{}, msg[s:], errors.New("Unknown Respond Type")
 	}
 
 	str := resp.String()
@@ -42,7 +49,7 @@ func parseMsg(msg []byte) (Command, error) {
 	return Command{
 		Type: cmd,
 		Args: args,
-	}, nil
+	}, msg[s:], nil
 }
 
 func handler(conn net.Conn, instance Instance) {
@@ -61,27 +68,31 @@ func handler(conn net.Conn, instance Instance) {
 			fmt.Println("Error reading: ", err.Error())
 			return
 		}
+		buf = buf[:n]
+		fmt.Printf("Message Received: %s\n", strconv.Quote(string(buf)))
 
-		cmd, err := parseMsg(buf[:n])
-		fmt.Printf("%+v\n", cmd)
-		if err != nil {
-			fmt.Println("Error parsing resp", err.Error())
-			os.Exit(1)
-		}
-
-		response, err := cmd.Respond(instance)
-		fmt.Println(string(response))
-		if err != nil {
-			fmt.Println("Error creating responds:", err.Error())
-			os.Exit(1)
-		}
-
-		if response != nil {
-			_, err = conn.Write(response)
-
+		for len(buf) > 0 {
+			var cmd Command
+			cmd, buf, err = parseMsg(buf)
 			if err != nil {
-				fmt.Println("Error writing: ", err.Error())
+				fmt.Println("Error parsing response", err.Error())
 				os.Exit(1)
+			}
+
+			response, err := cmd.Respond(instance)
+			fmt.Println("Message responds: ", strconv.Quote(string(response)))
+			if err != nil {
+				fmt.Println("Error creating responds:", err.Error())
+				os.Exit(1)
+			}
+
+			if response != nil {
+				_, err = conn.Write(response)
+
+				if err != nil {
+					fmt.Println("Error writing: ", err.Error())
+					os.Exit(1)
+				}
 			}
 		}
 	}
@@ -102,24 +113,53 @@ type Instance struct {
 	Info  dict_of_dict
 }
 
-func syncSlaveToMaster(masterAddr string) {
+func syncSlaveToMaster(masterAddr string, port string) {
 	conn, err := net.Dial("tcp", masterAddr)
 	if err != nil {
 		panic(err)
 	}
 
+	// Step 1: send ping
 	_, err = conn.Write([]byte("*1\r\n$4\r\nping\r\n"))
 	if err != nil {
 		panic(err)
 	}
 
-	var resp []byte
-	_, err = conn.Read(resp)
+	// Receive pong
+	resp := make([]byte, 1024)
+	n, err := conn.Read(resp)
 
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(string(resp))
+
+	fmt.Printf("Sync to Master: Response to ping: %s\n", strconv.Quote(string(resp[:n])))
+
+	// Step 2: Send REPLCONF listening-port <PORT>
+	_, err = conn.Write(encodeArray([]string{"REPLCONF", "listening-port", port}))
+	if err != nil {
+		panic(err)
+	}
+
+	// Receive OK
+	n, err = conn.Read(resp)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Sync to Master: Response to REPLCONF listening-port <port>: %s\n", strconv.Quote(string(resp[:n])))
+
+	// Send REPLCONF capa psync2
+	_, err = conn.Write(encodeArray([]string{"REPLCONF", "capa", "psync2"}))
+	if err != nil {
+		panic(err)
+	}
+
+	// Receive OK
+	n, err = conn.Read(resp)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Sync to Master: Response to REPLCONF capa psync2: %s\n", strconv.Quote(string(resp[:n])))
 }
 
 func main() {
@@ -160,7 +200,7 @@ func main() {
 
 	// Sync if we are a slave
 	if instance.Info["replication"]["role"] == "slave" {
-		syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]))
+		syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]), port)
 	}
 
 	// Start server

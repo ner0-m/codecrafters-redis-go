@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -60,6 +61,14 @@ func encodeBulk(str string) []byte {
 	return []byte("$" + strconv.Itoa(len(str)) + "\r\n" + str + "\r\n")
 }
 
+func encodeArray(a []string) []byte {
+	msg := fmt.Sprintf("*%d\r\n", len(a))
+	for _, e := range a {
+		msg = fmt.Sprintf("%s%s", msg, encodeBulk(e))
+	}
+	return []byte(msg)
+}
+
 func ReadNextRESP(b []byte) (n int, resp Response) {
 	if len(b) == 0 {
 		return 0, Response{}
@@ -70,14 +79,14 @@ func ReadNextRESP(b []byte) (n int, resp Response) {
 	case Error, Status, Int, Bulk, Array:
 	default:
 		// Invalid Type
-		return 0, Response{}
+		return -1, Response{}
 	}
 	// Find next \r\n
 	i := strings.Index(string(b), "\r\n")
 
 	// Couldn't find it, so it's invalid
 	if i == -1 {
-		return 0, Response{}
+		return -2, Response{}
 	}
 
 	i += 2 // move after \r\n

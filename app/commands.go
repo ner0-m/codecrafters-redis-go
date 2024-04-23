@@ -9,12 +9,13 @@ import (
 )
 
 const (
-	PING  = "ping"
-	ECHO  = "echo"
-	SET   = "set"
-	GET   = "get"
-	INFO  = "info"
-	ERROR = "error"
+	PING     = "ping"
+	ECHO     = "echo"
+	SET      = "set"
+	GET      = "get"
+	INFO     = "info"
+	REPLCONF = "replconf"
+	ERROR    = "error"
 )
 
 type Command struct {
@@ -34,6 +35,8 @@ func (cmd *Command) Respond(instance Instance) ([]byte, error) {
 		return get(cmd.Args[0], instance.Store)
 	case INFO:
 		return info(cmd.Args[0], instance)
+	case REPLCONF:
+		return replconf(cmd.Args[0], cmd.Args[1:])
 	case ERROR:
 		return []byte(""), nil
 	}
@@ -81,9 +84,19 @@ func get(key string, store Store) ([]byte, error) {
 
 func info(section string, instance Instance) ([]byte, error) {
 	if strings.ToLower(section) == "replication" {
-        repl := instance.Info["replication"]
-        return encodeBulk(fmt.Sprintf("# Replication\r\nrole:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%s\r\n", repl["role"], repl["master_replid"], repl["master_repl_offset"])), nil
+		repl := instance.Info["replication"]
+		return encodeBulk(fmt.Sprintf("# Replication\r\nrole:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%s\r\n", repl["role"], repl["master_replid"], repl["master_repl_offset"])), nil
 	} else {
 		return nil, errors.New("Unknown INFO section: '" + section + "'")
 	}
+}
+
+func replconf(cmd string, args []string) ([]byte, error) {
+    fmt.Printf("Command: REPLCONF %s %v\n", cmd, args)
+	if strings.ToLower(cmd) == "listening-port" {
+		return []byte("+OK\r\n"), nil
+	} else if strings.ToLower(cmd) == "capa" {
+		return []byte("+OK\r\n"), nil
+	}
+	return nil, fmt.Errorf("Unknown command to replconf: %s, with args %v", cmd, args)
 }
