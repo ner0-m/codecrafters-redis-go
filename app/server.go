@@ -10,66 +10,42 @@ import (
 	"strings"
 )
 
-func handleCommand(resp Response, store Store) ([]byte, error) {
+func parseMsg(msg []byte) (Command, error) {
+	s, resp := ReadNextRESP(msg)
+
+	if s == 0 {
+		return Command{}, errors.New("no resp object")
+	}
+
+	if resp.Type == Error {
+		return Command{ERROR, make([]string, 0)}, nil
+	}
+
+	if resp.Type != Int && resp.Type != Status && resp.Type != Bulk && resp.Type != Array {
+		return Command{}, errors.New("Unknown Respond Type")
+	}
+
 	str := resp.String()
 	lines := strings.Split(str, "\r\n")
 
-	var cmd []string
+	var cmds []string
 	for _, line := range lines {
 		if len(line) == 0 || line[0] == '$' {
 			continue
 		}
-		cmd = append(cmd, line)
+		cmds = append(cmds, line)
 	}
 
-	switch strings.ToLower(cmd[0]) {
-	case "ping":
-		fmt.Printf("Debug: echo\n")
-		return ping()
-	case "echo":
-		fmt.Printf("Debug: echo %s\n", cmd[1])
-		return echo(cmd[1])
-	case "set":
-		return set(cmd, store)
-	case "get":
-        return get(cmd[1], store)
-    case "info":
-        if len(cmd) == 2 {
-            return info(cmd[1])
-        } else {
-            return info("")
-        }
-	}
-	return nil, errors.New("Unknown command: '" + strings.Join(cmd[:], " ") + "'")
+	cmd := strings.ToLower(cmds[0])
+	args := cmds[1:]
+
+	return Command{
+		Type: cmd,
+		Args: args,
+	}, nil
 }
 
-func parseMsg(msg []byte, store Store) ([]byte, error) {
-	s, resp := ReadNextRESP(msg)
-
-	if s == 0 {
-		return nil, errors.New("no resp object")
-	}
-
-	t := resp.Type
-
-	switch t {
-	case Int:
-	case Status:
-	case Bulk:
-	case Array:
-		response, err := handleCommand(resp, store)
-		if err != nil {
-			return nil, err
-		}
-
-		return response, nil
-	case Error:
-		return []byte(""), nil
-	}
-	return nil, nil
-}
-
-func handler(conn net.Conn, store Store) {
+func handler(conn net.Conn, instance Instance) {
 	defer conn.Close()
 
 	for {
@@ -86,9 +62,15 @@ func handler(conn net.Conn, store Store) {
 			return
 		}
 
-		response, err := parseMsg(buf[:n], store)
+		cmd, err := parseMsg(buf[:n])
 		if err != nil {
-			fmt.Println("Error reading resp", err.Error())
+			fmt.Println("Error parsing resp", err.Error())
+			os.Exit(1)
+		}
+
+		response, err := cmd.Respond(instance)
+		if err != nil {
+			fmt.Println("Error creating responds:", err.Error())
 			os.Exit(1)
 		}
 
@@ -103,32 +85,67 @@ func handler(conn net.Conn, store Store) {
 	}
 }
 
-func eventLoop(connections chan net.Conn, store Store) {
+func eventLoop(connections chan net.Conn, instance Instance) {
 	for conn := range connections {
 		fmt.Println("New connection")
-		go handler(conn, store)
+		go handler(conn, instance)
 	}
 }
 
-func main() {
-	port := flag.Int("port", 6379, "port to start TCP server on")
-	flag.Parse()
+type dict map[string]string
+type dict_of_dict map[string]dict
 
-	store := Store{
+type Instance struct {
+	Store Store
+	Info  dict_of_dict
+}
+
+func main() {
+	host := "0.0.0.0"
+	port := "6379"
+
+	instance := Instance{}
+	instance.Info = make(dict_of_dict)
+	instance.Info["replication"] = make(dict)
+	instance.Info["replication"]["role"] = "master"
+
+	instance.Store = Store{
 		Store: make(map[string]Value),
 	}
 
-	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", *port))
+	// Parse flags
+	port_arg_pointer := flag.String("port", port, "--port <PORT>")
+	primary_host_arg_pointer := flag.String("replicaof", "", "--replicaof <MASTER HOST> <MASTER PORT>")
+	flag.Parse()
+
+	if len(*primary_host_arg_pointer) > 0 {
+		primary_host := (*primary_host_arg_pointer)
+		if len(primary_host) > 1 {
+			primary_port := flag.Arg(0)
+			if len(primary_port) > 0 {
+				instance.Info["replication"]["role"] = "slave"
+				instance.Info["replication"]["host"] = primary_host
+				instance.Info["replication"]["port"] = primary_port
+			}
+		}
+	}
+
+	if len(*port_arg_pointer) > 0 {
+		port = *port_arg_pointer
+	}
+
+	// Start server
+	l, err := net.Listen("tcp", net.JoinHostPort(host, port))
 	if err != nil {
-		fmt.Printf("Failed to bind to port %d\n", *port)
+		fmt.Printf("Failed to bind to %s:%s\n", host, port)
 		os.Exit(1)
 	}
 	defer l.Close()
 
-	fmt.Printf("Server is listening on port %d\n", *port)
+	fmt.Printf("Server is listening on port %s\n", port)
 
 	connections := make(chan net.Conn)
-	go eventLoop(connections, store)
+	go eventLoop(connections, instance)
 
 	for {
 		conn, err := l.Accept()

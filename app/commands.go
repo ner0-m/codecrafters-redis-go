@@ -8,6 +8,38 @@ import (
 	"time"
 )
 
+const (
+	PING = "ping"
+	ECHO = "echo"
+	SET  = "set"
+	GET  = "get"
+	INFO = "info"
+    ERROR = "error"
+)
+
+type Command struct {
+	Type string
+	Args []string
+}
+
+func (cmd *Command) Respond(instance Instance) ([]byte, error) {
+	switch cmd.Type {
+	case PING:
+		return ping()
+	case ECHO:
+		return echo(cmd.Args[0])
+	case SET:
+		return set(cmd.Args, instance.Store)
+	case GET:
+		return get(cmd.Args[0], instance.Store)
+	case INFO:
+		return info(cmd.Args[0], instance)
+    case ERROR:
+        return []byte(""), nil
+	}
+	return nil, errors.New("Unknown Command")
+}
+
 func ping() ([]byte, error) {
 	return []byte("+PONG\r\n"), nil
 }
@@ -16,21 +48,21 @@ func echo(str string) ([]byte, error) {
 	return encodeBulk(str), nil
 }
 
-func set(cmd []string, store Store) ([]byte, error) {
-	if len(cmd) == 3 {
-		fmt.Printf("Debug: set %s = %s\n", cmd[1], cmd[2])
-		store.Write(cmd[1], cmd[2], nil)
+func set(args []string, store Store) ([]byte, error) {
+	if len(args) == 2 {
+		fmt.Printf("Debug: set %s = %s\n", args[1], args[2])
+		store.Write(args[1], args[2], nil)
 		return []byte("+OK\r\n"), nil
-	} else if len(cmd) == 5 && strings.ToLower(cmd[3]) == "px" {
-		fmt.Printf("Debug: set %s = %s, %s %s\n", cmd[1], cmd[2], cmd[3], cmd[4])
-		d, err := strconv.Atoi(cmd[4])
+	} else if len(args) == 4 && strings.ToLower(args[2]) == "px" {
+		fmt.Printf("Debug: set %s = %s, %s %s\n", args[0], args[1], args[2], args[3])
+		d, err := strconv.Atoi(args[3])
 		if err != nil {
 			return nil, errors.New("Could not convert expiery length")
 		}
 		var dur *time.Duration
 		dur = new(time.Duration)
 		*dur = time.Duration(d) * time.Millisecond
-		store.Write(cmd[1], cmd[2], dur)
+		store.Write(args[0], args[1], dur)
 		return []byte("+OK\r\n"), nil
 	} else {
 		return nil, errors.New("Unknown command for set")
@@ -47,9 +79,9 @@ func get(key string, store Store) ([]byte, error) {
 	return encodeBulk(v), nil
 }
 
-func info(section string) ([]byte, error) {
+func info(section string, instance Instance) ([]byte, error) {
 	if strings.ToLower(section) == "replication" {
-		return encodeBulk("# Replication\r\nrole:master\r\n"), nil
+		return encodeBulk(fmt.Sprintf("# Replication\r\nrole:%s\r\n", instance.Info["replication"]["role"])), nil
 	} else {
 		return nil, errors.New("Unknown INFO section: '" + section + "'")
 	}

@@ -40,11 +40,11 @@ func (s Store) Contains(key string) bool {
 }
 
 func (s Store) Read(key string) (string, bool) {
-    contains := s.Contains(key)
+	contains := s.Contains(key)
 
-    if !contains {
-        return "", false
-    }
+	if !contains {
+		return "", false
+	}
 
 	v, ok := s.Store[key]
 
