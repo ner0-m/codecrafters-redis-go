@@ -57,6 +57,10 @@ func parseBulk(count int, i int, b []byte) error {
 	return nil
 }
 
+func encodeBulkNoCrlf(str string) []byte {
+	return []byte("$" + strconv.Itoa(len(str)) + "\r\n" + str)
+}
+
 func encodeBulk(str string) []byte {
 	return []byte("$" + strconv.Itoa(len(str)) + "\r\n" + str + "\r\n")
 }
