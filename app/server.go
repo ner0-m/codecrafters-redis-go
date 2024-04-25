@@ -28,11 +28,9 @@ func parseMsg(msg []byte) (Command, []byte, error) {
 		return Command{ERROR, make([]string, 0)}, msg[s:], nil
 	}
 
-
 	if resp.Type != Int && resp.Type != Status && resp.Type != Bulk && resp.Type != Array {
 		return Command{}, msg[s:], errors.New("Unknown Respond Type")
 	}
-
 
 	str := resp.String()
 	lines := strings.Split(str, "\r\n")
@@ -57,7 +55,7 @@ func parseMsg(msg []byte) (Command, []byte, error) {
 func handler(conn net.Conn, instance *Instance) {
 	defer conn.Close()
 
-    fmt.Printf("Working connection %v\n", conn)
+	fmt.Printf("Working connection %v\n", conn)
 
 	for {
 		buf := make([]byte, 1024)
@@ -88,7 +86,7 @@ func handler(conn net.Conn, instance *Instance) {
 			}
 
 			if cmd.Type == SET && instance.Info["replication"]["role"] == "master" {
-                fmt.Printf("%v: Send set to replica %v\n", conn, strconv.Quote(string(tmp)))
+				fmt.Printf("%v: Send set to replica %v\n", conn, strconv.Quote(string(tmp)))
 				for _, rconn := range instance.Replicas {
 					_, err = rconn.Write(tmp)
 
@@ -99,18 +97,21 @@ func handler(conn net.Conn, instance *Instance) {
 			}
 
 			response, err := cmd.Respond(*instance)
-			fmt.Printf("%v: Message responds: %s\n", conn, strconv.Quote(string(response)))
-			if err != nil {
-				fmt.Println(conn, "Error creating responds:", err.Error())
-				os.Exit(1)
-			}
 
-			if response != nil {
-				_, err = conn.Write(response)
-
+			if instance.Info["replication"]["role"] == "master" {
+				fmt.Printf("%v: Message responds: %s\n", conn, strconv.Quote(string(response)))
 				if err != nil {
-					fmt.Println(conn, "Error writing: ", err.Error())
+					fmt.Println(conn, "Error creating responds:", err.Error())
 					os.Exit(1)
+				}
+
+				if response != nil {
+					_, err = conn.Write(response)
+
+					if err != nil {
+						fmt.Println(conn, "Error writing: ", err.Error())
+						os.Exit(1)
+					}
 				}
 			}
 
