@@ -52,7 +52,7 @@ func parseMsg(msg []byte) (Command, []byte, error) {
 	}, msg[s:], nil
 }
 
-func handler(conn net.Conn, instance Instance) {
+func handler(conn net.Conn, instance *Instance) {
 	defer conn.Close()
 
 	for {
@@ -61,7 +61,7 @@ func handler(conn net.Conn, instance Instance) {
 
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("Connection closed")
+				fmt.Println("EOF found, closing connection")
 				return
 			}
 
@@ -79,7 +79,7 @@ func handler(conn net.Conn, instance Instance) {
 				os.Exit(1)
 			}
 
-			response, err := cmd.Respond(instance)
+			response, err := cmd.Respond(*instance)
 			fmt.Printf("Message responds: %s\n", strconv.Quote(string(response)))
 			if err != nil {
 				fmt.Println("Error creating responds:", err.Error())
@@ -94,11 +94,25 @@ func handler(conn net.Conn, instance Instance) {
 					os.Exit(1)
 				}
 			}
+
+			if cmd.Type == SET {
+				for _, rconn := range instance.Replicas {
+					_, err = rconn.Write(response)
+
+					if err != nil {
+						fmt.Println("Error writing to replica: ", err.Error())
+					}
+				}
+			}
+
+			if cmd.Type == PSYNC {
+				instance.Replicas = append(instance.Replicas, conn)
+			}
 		}
 	}
 }
 
-func eventLoop(connections chan net.Conn, instance Instance) {
+func eventLoop(connections chan net.Conn, instance *Instance) {
 	for conn := range connections {
 		fmt.Println("New connection")
 		go handler(conn, instance)
@@ -109,8 +123,9 @@ type dict map[string]string
 type dict_of_dict map[string]dict
 
 type Instance struct {
-	Store Store
-	Info  dict_of_dict
+	Store    Store
+	Info     dict_of_dict
+	Replicas []net.Conn
 }
 
 func syncSlaveToMaster(masterAddr string, port string) {
@@ -226,7 +241,7 @@ func main() {
 	fmt.Printf("Server is listening on port %s\n", port)
 
 	connections := make(chan net.Conn)
-	go eventLoop(connections, instance)
+	go eventLoop(connections, &instance)
 
 	for {
 		conn, err := l.Accept()
