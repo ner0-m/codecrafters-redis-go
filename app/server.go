@@ -28,9 +28,11 @@ func parseMsg(msg []byte) (Command, []byte, error) {
 		return Command{ERROR, make([]string, 0)}, msg[s:], nil
 	}
 
+
 	if resp.Type != Int && resp.Type != Status && resp.Type != Bulk && resp.Type != Array {
 		return Command{}, msg[s:], errors.New("Unknown Respond Type")
 	}
+
 
 	str := resp.String()
 	lines := strings.Split(str, "\r\n")
@@ -55,34 +57,51 @@ func parseMsg(msg []byte) (Command, []byte, error) {
 func handler(conn net.Conn, instance *Instance) {
 	defer conn.Close()
 
+    fmt.Printf("Working connection %v\n", conn)
+
 	for {
 		buf := make([]byte, 1024)
 		n, err := conn.Read(buf)
 
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("EOF found, closing connection")
+				fmt.Println(conn, "EOF found, closing connection")
 				return
 			}
 
-			fmt.Println("Error reading: ", err.Error())
+			fmt.Println(conn, "Error reading: ", err.Error())
 			return
 		}
 		buf = buf[:n]
-		fmt.Printf("Message Received: %s\n", strconv.Quote(string(buf)))
 
 		for len(buf) > 0 {
+			// Copy to send it to replica if necessary
+			tmp := make([]byte, len(buf))
+			copy(tmp, buf)
+
 			var cmd Command
 			cmd, buf, err = parseMsg(buf)
+
 			if err != nil {
-				fmt.Println("Error parsing response", err.Error())
+				fmt.Println(conn, "Error parsing response", err.Error())
 				os.Exit(1)
 			}
 
+			if cmd.Type == SET && instance.Info["replication"]["role"] == "master" {
+                fmt.Printf("%v: Send set to replica %v\n", conn, strconv.Quote(string(tmp)))
+				for _, rconn := range instance.Replicas {
+					_, err = rconn.Write(tmp)
+
+					if err != nil {
+						fmt.Println(conn, "Error writing to replica: ", err.Error())
+					}
+				}
+			}
+
 			response, err := cmd.Respond(*instance)
-			fmt.Printf("Message responds: %s\n", strconv.Quote(string(response)))
+			fmt.Printf("%v: Message responds: %s\n", conn, strconv.Quote(string(response)))
 			if err != nil {
-				fmt.Println("Error creating responds:", err.Error())
+				fmt.Println(conn, "Error creating responds:", err.Error())
 				os.Exit(1)
 			}
 
@@ -90,18 +109,8 @@ func handler(conn net.Conn, instance *Instance) {
 				_, err = conn.Write(response)
 
 				if err != nil {
-					fmt.Println("Error writing: ", err.Error())
+					fmt.Println(conn, "Error writing: ", err.Error())
 					os.Exit(1)
-				}
-			}
-
-			if cmd.Type == SET {
-				for _, rconn := range instance.Replicas {
-					_, err = rconn.Write(response)
-
-					if err != nil {
-						fmt.Println("Error writing to replica: ", err.Error())
-					}
 				}
 			}
 
@@ -128,7 +137,7 @@ type Instance struct {
 	Replicas []net.Conn
 }
 
-func syncSlaveToMaster(masterAddr string, port string) {
+func syncSlaveToMaster(masterAddr string, port string) net.Conn {
 	conn, err := net.Dial("tcp", masterAddr)
 	if err != nil {
 		panic(err)
@@ -187,6 +196,8 @@ func syncSlaveToMaster(masterAddr string, port string) {
 		panic(err)
 	}
 	fmt.Printf("Sync to Master: Response to PSYNC ? -1: %s\n", strconv.Quote(string(resp[:n])))
+
+	return conn
 }
 
 func main() {
@@ -226,8 +237,9 @@ func main() {
 	}
 
 	// Sync if we are a slave
+	var master_conn net.Conn
 	if instance.Info["replication"]["role"] == "slave" {
-		syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]), port)
+		master_conn = syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]), port)
 	}
 
 	// Start server
@@ -242,6 +254,10 @@ func main() {
 
 	connections := make(chan net.Conn)
 	go eventLoop(connections, &instance)
+
+	if master_conn != nil {
+		connections <- master_conn
+	}
 
 	for {
 		conn, err := l.Accept()

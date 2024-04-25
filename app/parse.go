@@ -85,6 +85,7 @@ func ReadNextRESP(b []byte) (n int, resp Response) {
 		// Invalid Type
 		return -1, Response{}
 	}
+
 	// Find next \r\n
 	i := strings.Index(string(b), "\r\n")
 
@@ -111,6 +112,10 @@ func ReadNextRESP(b []byte) (n int, resp Response) {
 	if resp.Type == Error {
 		return len(resp.Raw), resp
 	}
+
+    if resp.Type == Status {
+        return len(resp.Raw), resp
+    }
 
 	count, err := strconv.Atoi(resp.String())
 	if err != nil {

@@ -18,6 +18,7 @@ const (
 	REPLCONF = "replconf"
 	PSYNC    = "psync"
 	ERROR    = "error"
+	OK       = "ok"
 )
 
 type Command struct {
@@ -42,9 +43,11 @@ func (cmd *Command) Respond(instance Instance) ([]byte, error) {
 	case PSYNC:
 		return psync(cmd.Args, instance)
 	case ERROR:
-		return []byte(""), nil
+		return nil, nil
+    case OK:
+		return nil, nil
 	}
-	return nil, errors.New("Unknown Command")
+	return nil, errors.New("Unknown Command handling")
 }
 
 func ping() ([]byte, error) {
