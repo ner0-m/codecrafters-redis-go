@@ -98,7 +98,7 @@ func handler(conn net.Conn, instance *Instance) {
 
 			response, err := cmd.Respond(*instance)
 
-			if instance.Info["replication"]["role"] == "master" {
+			if conn != instance.Master {
 				fmt.Printf("%v: Message responds: %s\n", conn, strconv.Quote(string(response)))
 				if err != nil {
 					fmt.Println(conn, "Error creating responds:", err.Error())
@@ -136,6 +136,7 @@ type Instance struct {
 	Store    Store
 	Info     dict_of_dict
 	Replicas []net.Conn
+	Master   net.Conn
 }
 
 func syncSlaveToMaster(masterAddr string, port string) net.Conn {
@@ -238,9 +239,8 @@ func main() {
 	}
 
 	// Sync if we are a slave
-	var master_conn net.Conn
 	if instance.Info["replication"]["role"] == "slave" {
-		master_conn = syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]), port)
+		instance.Master = syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]), port)
 	}
 
 	// Start server
@@ -256,8 +256,8 @@ func main() {
 	connections := make(chan net.Conn)
 	go eventLoop(connections, &instance)
 
-	if master_conn != nil {
-		connections <- master_conn
+	if instance.Master != nil {
+		connections <- instance.Master
 	}
 
 	for {
