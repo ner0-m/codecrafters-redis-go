@@ -79,21 +79,19 @@ func handler(conn net.Conn, instance Instance) {
 				os.Exit(1)
 			}
 
-			responses, err := cmd.Respond(instance)
-			for i, response := range responses {
-				fmt.Printf("Message responds %d/%d: %s\n", i + 1, len(responses), strconv.Quote(string(response)))
+			response, err := cmd.Respond(instance)
+			fmt.Printf("Message responds: %s\n", strconv.Quote(string(response)))
+			if err != nil {
+				fmt.Println("Error creating responds:", err.Error())
+				os.Exit(1)
+			}
+
+			if response != nil {
+				_, err = conn.Write(response)
+
 				if err != nil {
-					fmt.Println("Error creating responds:", err.Error())
+					fmt.Println("Error writing: ", err.Error())
 					os.Exit(1)
-				}
-
-				if response != nil {
-					_, err = conn.Write(response)
-
-					if err != nil {
-						fmt.Println("Error writing: ", err.Error())
-						os.Exit(1)
-					}
 				}
 			}
 		}
@@ -174,12 +172,6 @@ func syncSlaveToMaster(masterAddr string, port string) {
 		panic(err)
 	}
 	fmt.Printf("Sync to Master: Response to PSYNC ? -1: %s\n", strconv.Quote(string(resp[:n])))
-
-	n, err = conn.Read(resp)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Sync to Master: RDB File: %s\n", strconv.Quote(string(resp[:n])))
 }
 
 func main() {
