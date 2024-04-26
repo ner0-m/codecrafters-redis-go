@@ -24,18 +24,19 @@ const (
 type Command struct {
 	Type string
 	Args []string
+	Raw  []byte
 }
 
-func (cmd *Command) Respond(instance Instance) ([]byte, error) {
+func (cmd *Command) CreateRespond(instance *Instance) ([]byte, error) {
 	switch cmd.Type {
 	case PING:
 		return ping()
 	case ECHO:
 		return echo(cmd.Args[0])
 	case SET:
-		return set(cmd.Args, instance.Store)
+		return set(cmd.Args, &instance.Store)
 	case GET:
-		return get(cmd.Args[0], instance.Store)
+		return get(cmd.Args[0], &instance.Store)
 	case INFO:
 		return info(cmd.Args[0], instance)
 	case REPLCONF:
@@ -44,7 +45,7 @@ func (cmd *Command) Respond(instance Instance) ([]byte, error) {
 		return psync(cmd.Args, instance)
 	case ERROR:
 		return nil, nil
-    case OK:
+	case OK:
 		return nil, nil
 	}
 	return nil, errors.New("Unknown Command handling")
@@ -58,7 +59,7 @@ func echo(str string) ([]byte, error) {
 	return encodeBulk(str), nil
 }
 
-func set(args []string, store Store) ([]byte, error) {
+func set(args []string, store *Store) ([]byte, error) {
 	if len(args) == 2 {
 		fmt.Printf("Debug: set %s = %s\n", args[0], args[1])
 		store.Write(args[0], args[1], nil)
@@ -79,7 +80,7 @@ func set(args []string, store Store) ([]byte, error) {
 	}
 }
 
-func get(key string, store Store) ([]byte, error) {
+func get(key string, store *Store) ([]byte, error) {
 	v, ok := store.Read(key)
 	if !ok {
 		fmt.Printf("Debug: get %s, not in store\n", key)
@@ -89,7 +90,7 @@ func get(key string, store Store) ([]byte, error) {
 	return encodeBulk(v), nil
 }
 
-func info(section string, instance Instance) ([]byte, error) {
+func info(section string, instance *Instance) ([]byte, error) {
 	if strings.ToLower(section) == "replication" {
 		repl := instance.Info["replication"]
 		return encodeBulk(fmt.Sprintf("# Replication\r\nrole:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%s\r\n", repl["role"], repl["master_replid"], repl["master_repl_offset"])), nil
@@ -108,7 +109,7 @@ func replconf(cmd string, args []string) ([]byte, error) {
 	return nil, fmt.Errorf("Unknown command to replconf: %s, with args %v", cmd, args)
 }
 
-func psync(args []string, instance Instance) ([]byte, error) {
+func psync(args []string, instance *Instance) ([]byte, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("PSYNC requires two arguments, given %v", args)
 	}
