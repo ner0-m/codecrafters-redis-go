@@ -1,0 +1,4 @@
+Current message: [*1 $4 ping]
+Current message: [*3 $8 REPLCONF $14 listening-port $4 6380]
+Current message: [*3 $8 REPLCONF $4 capa $6 psync2]
+Current message: [*3 $5 PSYNC $1 ? $2 -1]

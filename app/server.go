@@ -1,220 +1,316 @@
 package main
 
 import (
-	"errors"
+	"bufio"
 	"flag"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/codecrafters-io/redis-starter-go/app/commands"
+	"github.com/codecrafters-io/redis-starter-go/app/encode"
+	"github.com/codecrafters-io/redis-starter-go/app/instance"
+	"github.com/codecrafters-io/redis-starter-go/app/parser"
 )
 
-func parseMsg(msg []byte) (Command, []byte, error) {
-	s, resp := ReadNextRESP(msg)
-
-	if s == 0 {
-		return Command{}, msg, errors.New("Length 0")
-	}
-
-	if s == -1 {
-		return Command{}, msg, errors.New("Invalid Type")
-	} else if s == -1 {
-		return Command{}, msg, errors.New("No \\r\\n")
-	}
-
-	if resp.Type == Error {
-		return Command{ERROR, make([]string, 0)}, msg[s:], nil
-	}
-
-	if resp.Type != Int && resp.Type != Status && resp.Type != Bulk && resp.Type != Array {
-		return Command{}, msg[s:], errors.New("Unknown Respond Type")
-	}
-
-	str := resp.String()
-	lines := strings.Split(str, "\r\n")
-
-	var cmds []string
-	for _, line := range lines {
-		if len(line) == 0 || line[0] == '$' {
-			continue
-		}
-		cmds = append(cmds, line)
-	}
-
-	cmd := strings.ToLower(cmds[0])
-	args := cmds[1:]
-
-	return Command{
-		Type: cmd,
-		Args: args,
-	}, msg[s:], nil
+type ThreadSafeQueue[T any] struct {
+	queue []T
+	mutex sync.RWMutex
 }
 
-func handler(conn net.Conn, instance *Instance) {
-	defer conn.Close()
+func (q *ThreadSafeQueue[T]) Peek() T {
+	q.mutex.Lock()
+	val := q.queue[0]
+	q.mutex.Unlock()
 
-	fmt.Printf("Working connection %v\n", conn)
+	return val
+}
 
-	for {
-		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
+func (q *ThreadSafeQueue[T]) Pop() T {
+	q.mutex.Lock()
+	val := q.queue[0]
+	q.queue = q.queue[1:]
+	q.mutex.Unlock()
+
+	return val
+}
+
+func (q *ThreadSafeQueue[T]) Push(val T) {
+	q.mutex.Lock()
+	q.queue = append(q.queue, val)
+	q.mutex.Unlock()
+}
+
+func (q *ThreadSafeQueue[T]) Len() int {
+	q.mutex.Lock()
+	len := len(q.queue)
+	q.mutex.Unlock()
+
+	return len
+}
+
+type Client struct {
+	Conn     net.Conn
+	MsgQueue ThreadSafeQueue[parser.Message]
+	CmdQueue ThreadSafeQueue[commands.Command]
+	ReplMode bool
+}
+
+func (c *Client) Receive(msg parser.Message) {
+	c.MsgQueue.Push(msg)
+}
+
+func (c *Client) NumMessages() int {
+	return c.MsgQueue.Len()
+}
+
+func (c *Client) NumCommands() int {
+	return c.CmdQueue.Len()
+}
+
+func (c *Client) HandleNextMsg() commands.Command {
+	msg := c.MsgQueue.Pop()
+
+	cmdstr := strings.ToLower(msg.Data[0])
+
+	cmd := commands.CreateCommand(cmdstr, msg.Data[1:])
+
+	if cmd != nil {
+		c.CmdQueue.Push(cmd)
+		return cmd
+	}
+
+	return nil
+}
+
+func (c *Client) ExecuteCommand(cmd commands.Command, inst *instance.Instance) []byte {
+	var resp []byte
+	var err error
+	if cmd != nil {
+		resp, err = cmd.Execute(inst)
 
 		if err != nil {
-			if err == io.EOF {
-				fmt.Println(conn, "EOF found, closing connection")
-				return
-			}
-
-			fmt.Println(conn, "Error reading: ", err.Error())
-			return
+			fmt.Printf("Error executing command: %s", err.Error())
+			return nil
 		}
-		buf = buf[:n]
+	}
 
-		for len(buf) > 0 {
-			// Copy to send it to replica if necessary
-			tmp := make([]byte, len(buf))
-			copy(tmp, buf)
-
-			var cmd Command
-			cmd, buf, err = parseMsg(buf)
-
-			if err != nil {
-				fmt.Println(conn, "Error parsing response", err.Error())
-				os.Exit(1)
+	// Forward to replicas
+	setcmd, ok := cmd.(*commands.SetCommand)
+	if ok {
+		conns := inst.GetReplicas()
+		// replmsg := strings.Join(setcmd.Raw, "\r\n") + "\r\n"
+		replmsg := setcmd.Encode()
+		if inst.NumReplicas() > 0 {
+			fmt.Printf("Sending %s to replicas\n", strconv.Quote(string(replmsg)))
+			for _, conn := range conns {
+				conn.Write([]byte(replmsg))
 			}
+		}
+	}
 
-			if cmd.Type == SET && instance.Info["replication"]["role"] == "master" {
-				fmt.Printf("%v: Send set to replica %v\n", conn, strconv.Quote(string(tmp)))
-				for _, rconn := range instance.Replicas {
-					_, err = rconn.Write(tmp)
+	// For some other messages, we still need to do some work, even if we don't respond, or already have a responds
+	_, ok = cmd.(*commands.FullsyncCommand)
+	if ok {
+		for c.NumMessages() < 1 {
+		}
+		// Drop it, we don't deal with it
+		c.MsgQueue.Pop()
+	}
 
-					if err != nil {
-						fmt.Println(conn, "Error writing to replica: ", err.Error())
-					}
+	_, ok = cmd.(*commands.PsyncCommand)
+	if ok {
+		fmt.Printf("Adding replica\n")
+
+		// Add conn to connection
+		inst.AddReplica(c.Conn)
+	}
+
+	return resp
+}
+
+func (c *Client) Process(output chan []byte, inst *instance.Instance) {
+	for {
+		if c.NumMessages() > 0 {
+			cmd := c.HandleNextMsg()
+
+			if cmd != nil {
+				resp := c.ExecuteCommand(cmd, inst)
+
+				if resp != nil {
+					output <- resp
 				}
-			}
-
-			response, err := cmd.Respond(*instance)
-
-			if conn != instance.Master {
-				fmt.Printf("%v: Message responds: %s\n", conn, strconv.Quote(string(response)))
-				if err != nil {
-					fmt.Println(conn, "Error creating responds:", err.Error())
-					os.Exit(1)
-				}
-
-				if response != nil {
-					_, err = conn.Write(response)
-
-					if err != nil {
-						fmt.Println(conn, "Error writing: ", err.Error())
-						os.Exit(1)
-					}
-				}
-			}
-
-			if cmd.Type == PSYNC {
-				instance.Replicas = append(instance.Replicas, conn)
 			}
 		}
 	}
 }
 
-func eventLoop(connections chan net.Conn, instance *Instance) {
+func (c *Client) ProcessMaster(output chan []byte, inst *instance.Instance) {
+	for {
+		if c.NumMessages() > 0 {
+			cmd := c.HandleNextMsg()
+
+			if cmd != nil {
+				resp := c.ExecuteCommand(cmd, inst)
+
+				if resp != nil {
+					output <- resp
+				}
+			}
+		}
+	}
+}
+
+func crlfSplitFunc(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+
+	if i := strings.Index(string(data), "\r\n"); i >= 0 {
+		return i + 2, data[0:i], nil
+	}
+
+	if atEOF {
+		return len(data), data, nil
+	}
+
+	return 0, nil, nil
+}
+
+func asyncRead(conn net.Conn, client *Client) {
+	reader := bufio.NewReader(conn)
+
+	for {
+		cur, err := reader.ReadString('\n')
+
+		if err != nil {
+			fmt.Printf("Error reading from reader: %s\n", err.Error())
+			break
+		}
+
+		raw, data := parser.ParseMsg(cur, reader)
+
+		fmt.Printf("Receive: %s\n", strconv.Quote(strings.Join(raw, "\r\n")))
+
+		var msg parser.Message
+		if raw != nil && data != nil {
+			msg = parser.Message{Raw: raw, Data: data}
+			client.Receive(msg)
+		}
+	}
+}
+
+func asyncWrite(conn net.Conn, output chan []byte) {
+	for resp := range output {
+		_, err := conn.Write(resp)
+
+		if err != nil {
+			fmt.Printf("Error writing output: %s\n", err.Error())
+		}
+	}
+}
+
+func eventLoop(connections chan net.Conn, inst *instance.Instance) {
 	for conn := range connections {
-		fmt.Println("New connection")
-		go handler(conn, instance)
+		go func() {
+			defer conn.Close()
+
+			fmt.Printf("Working on connection %v\n", conn)
+
+			output := make(chan []byte)
+
+			client := Client{Conn: conn}
+
+			go asyncRead(conn, &client)
+			go asyncWrite(conn, output)
+			client.Process(output, inst)
+		}()
 	}
 }
 
-type dict map[string]string
-type dict_of_dict map[string]dict
+func handleMaster(conn net.Conn, port string, inst *instance.Instance) {
+	client := Client{Conn: conn}
+	output := make(chan []byte)
 
-type Instance struct {
-	Store    Store
-	Info     dict_of_dict
-	Replicas []net.Conn
-	Master   net.Conn
-}
-
-func syncSlaveToMaster(masterAddr string, port string) net.Conn {
-	conn, err := net.Dial("tcp", masterAddr)
-	if err != nil {
-		panic(err)
-	}
+	go asyncRead(conn, &client)
+	go asyncWrite(conn, output)
 
 	// Step 1: send ping
-	_, err = conn.Write([]byte("*1\r\n$4\r\nping\r\n"))
-	if err != nil {
-		panic(err)
+	output <- []byte("*1\r\n$4\r\nPING\r\n")
+
+	// Wait for response
+	for client.NumMessages() == 0 {
 	}
 
-	// Receive pong
-	resp := make([]byte, 1024)
-	n, err := conn.Read(resp)
+	msg := client.MsgQueue.Pop()
 
-	if err != nil {
-		panic(err)
+	cmdstr := strings.ToLower(msg.Data[0])
+	if cmdstr != "pong" {
+		fmt.Printf("Handshake with master failed, expected pong, is %s\n", strconv.Quote(cmdstr))
 	}
-
-	fmt.Printf("Sync to Master: Response to ping: %s\n", strconv.Quote(string(resp[:n])))
 
 	// Step 2: Send REPLCONF listening-port <PORT>
-	_, err = conn.Write(encodeArray([]string{"REPLCONF", "listening-port", port}))
-	if err != nil {
-		panic(err)
+	output <- encode.EncodeArray([]string{"REPLCONF", "listening-port", port})
+
+	// Wait for response
+	for client.NumMessages() == 0 {
 	}
 
-	// Receive OK
-	n, err = conn.Read(resp)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Sync to Master: Response to REPLCONF listening-port <port>: %s\n", strconv.Quote(string(resp[:n])))
-
-	// Send REPLCONF capa psync2
-	_, err = conn.Write(encodeArray([]string{"REPLCONF", "capa", "psync2"}))
-	if err != nil {
-		panic(err)
+	msg = client.MsgQueue.Pop()
+	cmdstr = strings.ToLower(msg.Data[0])
+	if cmdstr != "ok" {
+		fmt.Printf("Handshake with master failed, expected OK to REPLCONF listening-port %s\n", port)
 	}
 
-	// Receive OK
-	n, err = conn.Read(resp)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Sync to Master: Response to REPLCONF capa psync2: %s\n", strconv.Quote(string(resp[:n])))
+	output <- encode.EncodeArray([]string{"REPLCONF", "capa", "psync2"})
 
-	// Step 3: Send PSYNC
-	_, err = conn.Write(encodeArray([]string{"PSYNC", "?", "-1"}))
-	if err != nil {
-		panic(err)
+	// Wait for response
+	for client.NumMessages() == 0 {
 	}
 
-	n, err = conn.Read(resp)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Sync to Master: Response to PSYNC ? -1: %s\n", strconv.Quote(string(resp[:n])))
+	msg = client.MsgQueue.Pop()
+	cmdstr = strings.ToLower(msg.Data[0])
 
-	return conn
+	if cmdstr != "ok" {
+		fmt.Printf("Handshake with master failed, expected OK to REPLCONF capa psync2\n")
+	}
+
+	output <- encode.EncodeArray([]string{"PSYNC", "?", "-1"})
+
+	// Wait for response
+	for client.NumMessages() == 0 {
+	}
+
+	msg = client.MsgQueue.Pop()
+	cmdstr = strings.ToLower(msg.Data[0])
+	if cmdstr == "fullresync" {
+		fmt.Printf("Handshake with master failed, expected FULLRESYNC to REPLCONF capa psync2\n")
+	}
+
+	// Wait for RDB file
+	for client.NumMessages() == 0 {
+	}
+	msg = client.MsgQueue.Pop()
+
+	client.Process(output, inst)
 }
 
 func main() {
 	host := "0.0.0.0"
 	port := "6379"
 
-	instance := Instance{}
-	instance.Info = make(dict_of_dict)
-	instance.Info["replication"] = make(dict)
-	instance.Info["replication"]["role"] = "master"
-	instance.Info["replication"]["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-	instance.Info["replication"]["master_repl_offset"] = "0"
+	inst := instance.Instance{}
+	inst.Info = make(map[string]map[string]string)
+	inst.Info["replication"] = make(map[string]string)
+	inst.Info["replication"]["role"] = "master"
+	inst.Info["replication"]["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+	inst.Info["replication"]["master_repl_offset"] = "0"
 
-	instance.Store = Store{
-		Store: make(map[string]Value),
+	inst.Store = instance.Store{
+		Store: make(map[string]instance.Value),
 	}
 
 	// Parse flags
@@ -227,20 +323,15 @@ func main() {
 		if len(master_host) > 1 {
 			master_port := flag.Arg(0)
 			if len(master_port) > 0 {
-				instance.Info["replication"]["role"] = "slave"
-				instance.Info["replication"]["port"] = master_port
-				instance.Info["replication"]["host"] = master_host
+				inst.Info["replication"]["role"] = "slave"
+				inst.Info["replication"]["port"] = master_port
+				inst.Info["replication"]["host"] = master_host
 			}
 		}
 	}
 
 	if len(*port_arg_pointer) > 0 {
 		port = *port_arg_pointer
-	}
-
-	// Sync if we are a slave
-	if instance.Info["replication"]["role"] == "slave" {
-		instance.Master = syncSlaveToMaster(net.JoinHostPort(instance.Info["replication"]["host"], instance.Info["replication"]["port"]), port)
 	}
 
 	// Start server
@@ -254,10 +345,18 @@ func main() {
 	fmt.Printf("Server is listening on port %s\n", port)
 
 	connections := make(chan net.Conn)
-	go eventLoop(connections, &instance)
+	go eventLoop(connections, &inst)
 
-	if instance.Master != nil {
-		connections <- instance.Master
+	// Sync if we are a slave
+	if inst.Info["replication"]["role"] == "slave" {
+		conn, err := net.Dial("tcp", net.JoinHostPort(inst.Info["replication"]["host"], inst.Info["replication"]["port"]))
+
+		if err != nil {
+			fmt.Printf("Error connection to master: %s\n", err.Error())
+			os.Exit(1)
+		}
+
+		go handleMaster(conn, port, &inst)
 	}
 
 	for {

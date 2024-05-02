@@ -1,4 +1,4 @@
-package main
+package instance
 
 import (
 	"sync"
@@ -16,7 +16,7 @@ type Store struct {
 	Store map[string]Value
 }
 
-func (s Store) Write(key string, value string, expiry *time.Duration) {
+func (s *Store) Write(key string, value string, expiry *time.Duration) {
 	s.Mutex.Lock()
 	s.Store[key] = Value{
 		Value:      value,
@@ -26,7 +26,7 @@ func (s Store) Write(key string, value string, expiry *time.Duration) {
 	s.Mutex.Unlock()
 }
 
-func (s Store) Contains(key string) bool {
+func (s *Store) Contains(key string) bool {
 	s.Mutex.Lock()
 	v, ok := s.Store[key]
 	s.Mutex.Unlock()
@@ -39,7 +39,7 @@ func (s Store) Contains(key string) bool {
 	}
 }
 
-func (s Store) Read(key string) (string, bool) {
+func (s *Store) Read(key string) (string, bool) {
 	contains := s.Contains(key)
 
 	if !contains {
