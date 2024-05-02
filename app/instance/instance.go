@@ -11,6 +11,7 @@ type Instance struct {
 	Replicas  []net.Conn
 	ReplMutex sync.RWMutex
 	Master    net.Conn
+	Offset    int
 }
 
 func (inst *Instance) NumReplicas() int {

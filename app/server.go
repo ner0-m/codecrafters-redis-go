@@ -71,7 +71,7 @@ func (c *Client) NumCommands() int {
 	return c.CmdQueue.Len()
 }
 
-func (c *Client) HandleNextMsg() commands.Command {
+func (c *Client) HandleNextMsg() (int, commands.Command) {
 	msg := c.MsgQueue.Pop()
 
 	cmdstr := strings.ToLower(msg.Data[0])
@@ -80,10 +80,10 @@ func (c *Client) HandleNextMsg() commands.Command {
 
 	if cmd != nil {
 		c.CmdQueue.Push(cmd)
-		return cmd
+		return len(msg.Raw), cmd
 	}
 
-	return nil
+	return 0, nil
 }
 
 func (c *Client) ExecuteCommand(cmd commands.Command, inst *instance.Instance) []byte {
@@ -135,7 +135,7 @@ func (c *Client) ExecuteCommand(cmd commands.Command, inst *instance.Instance) [
 func (c *Client) Process(output chan []byte, inst *instance.Instance) {
 	for {
 		if c.NumMessages() > 0 {
-			cmd := c.HandleNextMsg()
+			i, cmd := c.HandleNextMsg()
 
 			if cmd != nil {
 				resp := c.ExecuteCommand(cmd, inst)
@@ -143,6 +143,8 @@ func (c *Client) Process(output chan []byte, inst *instance.Instance) {
 				if resp != nil {
 					output <- resp
 				}
+
+				inst.Offset += i
 			}
 		}
 	}
@@ -151,33 +153,23 @@ func (c *Client) Process(output chan []byte, inst *instance.Instance) {
 func (c *Client) ProcessMaster(output chan []byte, inst *instance.Instance) {
 	for {
 		if c.NumMessages() > 0 {
-			cmd := c.HandleNextMsg()
+			n, cmd := c.HandleNextMsg()
+
+			fmt.Printf("Receiving message of length %d\n", n)
 
 			if cmd != nil {
 				resp := c.ExecuteCommand(cmd, inst)
 
-				if resp != nil {
+				replcmd, ok := cmd.(*commands.ReplconfCommand)
+
+				if resp != nil && ok && replcmd.SubCmd == "getack" {
 					output <- resp
+
 				}
+				inst.Offset += n
 			}
 		}
 	}
-}
-
-func crlfSplitFunc(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-
-	if i := strings.Index(string(data), "\r\n"); i >= 0 {
-		return i + 2, data[0:i], nil
-	}
-
-	if atEOF {
-		return len(data), data, nil
-	}
-
-	return 0, nil, nil
 }
 
 func asyncRead(conn net.Conn, client *Client) {
@@ -193,10 +185,10 @@ func asyncRead(conn net.Conn, client *Client) {
 
 		raw, data := parser.ParseMsg(cur, reader)
 
-		fmt.Printf("Receive: %s\n", strconv.Quote(strings.Join(raw, "\r\n")))
+		fmt.Printf("Receive: %s\n", strconv.Quote(raw))
 
 		var msg parser.Message
-		if raw != nil && data != nil {
+		if raw != "" && data != nil {
 			msg = parser.Message{Raw: raw, Data: data}
 			client.Receive(msg)
 		}
@@ -295,7 +287,7 @@ func handleMaster(conn net.Conn, port string, inst *instance.Instance) {
 	}
 	msg = client.MsgQueue.Pop()
 
-	client.Process(output, inst)
+	client.ProcessMaster(output, inst)
 }
 
 func main() {

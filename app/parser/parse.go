@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -18,7 +19,7 @@ const (
 type Type byte
 
 type Message struct {
-	Raw  []string
+	Raw  string
 	Data []string
 }
 
@@ -26,16 +27,16 @@ func PeekMsgType(tokens []string) Type {
 	return Type(tokens[0][0])
 }
 
-func ParseArray(msgType Type, cur string, reader *bufio.Reader) ([]string, []string) {
+func ParseArray(msgType Type, cur string, reader *bufio.Reader) (string, []string) {
 	n, err := strconv.Atoi(cur[1 : len(cur)-2])
 
 	if err != nil {
 		fmt.Printf("Error parsing array length: %s\n", err.Error())
-		return nil, nil
+		return "", nil
 	}
 
 	var msg []string
-	var raw []string
+	raw := cur
 
 	i := 0
 	for i < n {
@@ -47,7 +48,7 @@ func ParseArray(msgType Type, cur string, reader *bufio.Reader) ([]string, []str
 		}
 
 		r, m := ParseMsg(data, reader)
-		raw = append(raw, r...)
+		raw = raw + r
 		msg = append(msg, m...)
 
 		i++
@@ -56,17 +57,17 @@ func ParseArray(msgType Type, cur string, reader *bufio.Reader) ([]string, []str
 	return raw, msg
 }
 
-func ParseMsg(cur string, reader *bufio.Reader) ([]string, []string) {
+func ParseMsg(cur string, reader *bufio.Reader) (string, []string) {
 	msgType := Type(cur[0])
 	switch msgType {
 	case Error, Status, Int:
-		return []string{cur}, []string{cur[1 : len(cur)-2]}
+		return cur, []string{cur[1 : len(cur)-2]}
 	case Bulk:
 		n, err := strconv.Atoi(cur[1 : len(cur)-2])
 
 		if err != nil {
 			fmt.Printf("Error reading for length of bulk string: %s\n", err.Error())
-			return nil, nil
+			return "", nil
 		}
 
 		// Read n bytes from connection
@@ -75,7 +76,7 @@ func ParseMsg(cur string, reader *bufio.Reader) ([]string, []string) {
 
 		if err != nil {
 			fmt.Printf("Could not read bulk string: %s\n", err.Error())
-			return nil, nil
+			return "", nil
 		}
 
 		// If the next two bytes are \r\n, read it and discard it
@@ -88,9 +89,10 @@ func ParseMsg(cur string, reader *bufio.Reader) ([]string, []string) {
 			n += 2
 		}
 
-		return []string{cur, string(buf[:n])}, []string{string(buf[:n-2])}
+		raw := strings.Join([]string{cur, string(buf[:n])}, "")
+		return raw, []string{string(buf[:n-2])}
 	case Array:
 		return ParseArray(msgType, cur, reader)
 	}
-	return nil, nil
+	return "", nil
 }

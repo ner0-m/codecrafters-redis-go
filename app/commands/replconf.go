@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/codecrafters-io/redis-starter-go/app/encode"
@@ -14,8 +15,9 @@ type ReplconfCommand struct {
 
 func (cmd *ReplconfCommand) Execute(inst *instance.Instance) ([]byte, error) {
 	if strings.ToLower(cmd.SubCmd) == "getack" {
-		return encode.EncodeArray([]string{"REPLCONF", "ACK", "0"}), nil
-	} 
+		offset := inst.Offset
+		return encode.EncodeArray([]string{"REPLCONF", "ACK", strconv.Itoa(offset)}), nil
+	}
 
 	return []byte("+OK\r\n"), nil
 }
