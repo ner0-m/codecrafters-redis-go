@@ -67,6 +67,8 @@ func CreateCommand(t string, args []string) Command {
 		return &ReplconfCommand{strings.ToLower(args[0]), strings.ToLower(args[1])}
 	} else if t == "psync" {
 		return &PsyncCommand{}
-	}
+	} else if t == "wait" {
+        return &WaitCommand{}
+    }
 	return nil
 }
