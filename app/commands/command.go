@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/codecrafters-io/redis-starter-go/app/instance"
@@ -54,8 +55,8 @@ func CreateCommand(t string, args []string) Command {
 	if t == "ping" {
 		return &PingCommand{}
 	} else if t == "pong" {
-        return &PongCommand{}
-    } else if t == "echo" {
+		return &PongCommand{}
+	} else if t == "echo" {
 		return &EchoCommand{args[0]}
 	} else if t == "info" {
 		return &InfoCommand{strings.ToLower(args[0])}
@@ -68,7 +69,9 @@ func CreateCommand(t string, args []string) Command {
 	} else if t == "psync" {
 		return &PsyncCommand{}
 	} else if t == "wait" {
-        return &WaitCommand{}
-    }
+		replCnt, _ := strconv.Atoi(args[0])
+		timeout, _ := strconv.Atoi(args[1])
+		return &WaitCommand{replCnt, timeout}
+	}
 	return nil
 }

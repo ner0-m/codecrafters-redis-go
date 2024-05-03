@@ -52,6 +52,15 @@ func (q *ThreadSafeQueue[T]) Len() int {
 	return len
 }
 
+func (q *ThreadSafeQueue[T]) Data() []T {
+	q.mutex.Lock()
+	c := make([]T, q.Len())
+	copy(c, q.queue)
+	q.mutex.Unlock()
+
+	return c
+}
+
 type Client struct {
 	Conn     net.Conn
 	MsgQueue ThreadSafeQueue[parser.Message]
@@ -100,9 +109,9 @@ func (c *Client) ExecuteCommand(cmd commands.Command, inst *instance.Instance) [
 
 	// Forward to replicas
 	setcmd, ok := cmd.(*commands.SetCommand)
+
 	if ok {
 		conns := inst.GetReplicas()
-		// replmsg := strings.Join(setcmd.Raw, "\r\n") + "\r\n"
 		replmsg := setcmd.Encode()
 		if inst.NumReplicas() > 0 {
 			fmt.Printf("Sending %s to replicas\n", strconv.Quote(string(replmsg)))
@@ -132,19 +141,44 @@ func (c *Client) ExecuteCommand(cmd commands.Command, inst *instance.Instance) [
 	return resp
 }
 
+func (c *Client) listenForAck(done chan struct{}, inst *instance.Instance) {
+	for {
+		if c.NumMessages() > 0 {
+			_, subcmd := c.HandleNextMsg()
+
+			_, ok := subcmd.(*commands.ReplconfCommand)
+			if ok {
+				subcmd.Execute(inst)
+			}
+		}
+
+		select {
+		case <-done:
+			return
+		}
+	}
+}
+
 func (c *Client) Process(output chan []byte, inst *instance.Instance) {
 	for {
 		if c.NumMessages() > 0 {
-			i, cmd := c.HandleNextMsg()
+			_, cmd := c.HandleNextMsg()
+			fmt.Printf("Processing command: %v\n", cmd)
 
 			if cmd != nil {
+				_, iswait := cmd.(*commands.WaitCommand)
+
+				done := make(chan struct{})
+				defer close(done)
+				if iswait {
+					go c.listenForAck(done, inst)
+				}
+
 				resp := c.ExecuteCommand(cmd, inst)
 
 				if resp != nil {
 					output <- resp
 				}
-
-				inst.Offset += i
 			}
 		}
 	}
@@ -153,20 +187,15 @@ func (c *Client) Process(output chan []byte, inst *instance.Instance) {
 func (c *Client) ProcessMaster(output chan []byte, inst *instance.Instance) {
 	for {
 		if c.NumMessages() > 0 {
-			n, cmd := c.HandleNextMsg()
-
-			fmt.Printf("Receiving message of length %d\n", n)
+			_, cmd := c.HandleNextMsg()
 
 			if cmd != nil {
 				resp := c.ExecuteCommand(cmd, inst)
-
 				replcmd, ok := cmd.(*commands.ReplconfCommand)
 
 				if resp != nil && ok && replcmd.SubCmd == "getack" {
 					output <- resp
-
 				}
-				inst.Offset += n
 			}
 		}
 	}
@@ -210,7 +239,7 @@ func eventLoop(connections chan net.Conn, inst *instance.Instance) {
 		go func() {
 			defer conn.Close()
 
-			fmt.Printf("Working on connection %v\n", conn)
+			fmt.Printf("Working on connection %v\n", conn.RemoteAddr().String())
 
 			output := make(chan []byte)
 
@@ -294,12 +323,13 @@ func main() {
 	host := "0.0.0.0"
 	port := "6379"
 
-	inst := instance.Instance{}
+	inst := instance.Instance{AckChan: make(chan struct{})}
 	inst.Info = make(map[string]map[string]string)
 	inst.Info["replication"] = make(map[string]string)
 	inst.Info["replication"]["role"] = "master"
 	inst.Info["replication"]["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 	inst.Info["replication"]["master_repl_offset"] = "0"
+	inst.SetAckCnt(0)
 
 	inst.Store = instance.Store{
 		Store: make(map[string]instance.Value),
