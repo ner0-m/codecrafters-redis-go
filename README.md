@@ -7,3 +7,10 @@ In this challenge, portions of the Redis protocol are implemented. It's a real f
 experience, and I used it both as a learning experience for Go and learning a
 bit more about implementing protocols, handling messages and everything
 involved!
+
+## Trying it out
+
+1. Clone the repo
+1. Ensure you have `go (1.19)` installed locally (I'm using version `1.22`)
+1. Run `./spawn_redis_server.sh` to run your Redis server
+1. Use `redis-cli` to interact with the server (e.g. `redis-cli echo hello`)
